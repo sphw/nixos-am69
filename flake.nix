@@ -40,14 +40,29 @@
             ubootAquilaA72
             linux_aquila
             ;
+          inherit (pkgs) ubootAquilaA72Flasher;
           # Convenient aliases for the three boot blobs.
           tiboot3 = pkgs.ubootAquilaR5;
           tispl-and-uboot = pkgs.ubootAquilaA72;
 
           # The bootable SD-card image (early bring-up; same blob layout boots eMMC).
           sdImage = self.nixosConfigurations.aquila-am69.config.system.build.sdImage;
+
+          # One-click, serial-free eMMC installer (host-side, USB DFU). Run it on the
+          # machine the module is plugged into: `nix run .#flash` (or build & run this).
+          aquila-emmc-flash = pkgs.callPackage ./pkgs/aquila-emmc-flash.nix {
+            image = self.nixosConfigurations.aquila-am69.config.system.build.sdImage;
+          };
         }
       );
+
+      apps = forAllSystems (system: {
+        # Serial-free eMMC flash over USB DFU.
+        flash = {
+          type = "app";
+          program = "${self.packages.${system}.aquila-emmc-flash}/bin/aquila-emmc-flash";
+        };
+      });
 
       nixosModules = {
         # Boot-chain wiring only (kernel, extlinux, device tree, initrd).

@@ -33,6 +33,16 @@ final: prev: {
     tee = "${final.opteeK3}/tee-raw.bin";
   };
 
+  # Flasher A72 U-Boot: same build, but auto-enters `dfu 0 mmc 0` (no serial). Loaded
+  # transiently into RAM by the host flash tool to write the eMMC over USB DFU.
+  ubootAquilaA72Flasher = prev.callPackage ./pkgs/u-boot-toradex.nix {
+    variant = "a72";
+    flasher = true;
+    tiLinuxFirmware = final.ti-linux-firmware-k3;
+    bl31 = "${final.armTrustedFirmwareK3}/bl31.bin";
+    tee = "${final.opteeK3}/tee-raw.bin";
+  };
+
   # Toradex 6.6 TI-based kernel with the k3-am69-aquila device trees.
   # Pass kernelPatches = [ ] explicitly so callPackage doesn't inject nixpkgs'
   # top-level `kernelPatches` *set* (buildLinux wants a list).

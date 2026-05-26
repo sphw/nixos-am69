@@ -73,21 +73,36 @@ zstdcat result/*.img.zst | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
 Insert into the carrier board, set the boot strap to SD, and watch the serial
 console (`ttyS2`, 115200 8N1).
 
-### eMMC over USB DFU (`aquila-emmc-flash`)
+### eMMC over USB DFU — one-click, no serial (`nix run .#flash`)
 
-The boot blobs live in the eMMC **boot0** hardware partition; the rootfs lives in the
-user area. Strap the module to USB peripheral (DFU) boot, connect Type-C/USB0 to the
-host, then run the bundled tool (it is on the target image's PATH, or build it with
-`orb nix build .#nixosConfigurations.aquila-am69.config.system.build.aquilaFlasher`):
+The whole install runs over USB DFU with **no serial console**. The K3 ROM, R5 SPL,
+and U-Boot all speak DFU; we boot a *flasher* U-Boot into RAM whose `preboot` auto-runs
+`dfu 0 mmc 0`, exposing the eMMC as DFU targets, then write everything from the host.
 
-```sh
-aquila-emmc-flash
-```
+1. Strap the module to USB peripheral (recovery/DFU) boot and connect Type-C/USB0 to
+   the host. Power on.
+2. On the host the board is plugged into, run:
 
-It loads `tiboot3` → `tispl` → `u-boot.img` into RAM over DFU, then prints the U-Boot
-prompt commands to write boot0 (`run update_tiboot3 / update_tispl / update_uboot`,
-offsets 0x0 / 0x400 / 0x1400) and to expose the eMMC user area (`ums 0 mmc 0`) for
-writing the rootfs.
+   ```sh
+   nix run .#flash          # or: orb nix run .#flash
+   ```
+
+It polls for each DFU stage and writes:
+- `tiboot3` / `tispl` / `u-boot.img` → eMMC **boot0** at `0x0` / `0x400` / `0x1400`,
+- the whole SD image (MBR + ext4 rootfs) → eMMC **user area**.
+
+Then it detaches; power-cycle (remove the recovery strap) and the module boots NixOS
+from eMMC. The big rootfs write goes over DFU, so it is slow — be patient.
+
+> Running from macOS: install `dfu-util` (`brew install dfu-util`) and run the script
+> against the artifacts in the OrbStack-shared store under `~/OrbStack/nixos/nix/store`,
+> since USB is attached to the Mac, not the Linux VM.
+
+### Updating just the bootloaders from a running system (`aquila-bootloader-update`)
+
+Once NixOS is running on the module, the `aquila-bootloader-update` tool (on the
+target's PATH) re-writes `tiboot3`/`tispl`/`u-boot.img` to eMMC `boot0` from the
+current build — handy after a U-Boot bump, no DFU needed.
 
 ## Layout
 

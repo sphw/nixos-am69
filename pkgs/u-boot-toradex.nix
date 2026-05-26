@@ -1,4 +1,4 @@
-# Toradex U-Boot for the Aquila AM69, built twice (one derivation, two variants).
+# Toradex U-Boot for the Aquila AM69, built from one derivation in several variants.
 # U-Boot's binman assembles the K3 boot blobs at build time:
 #
 #   variant = "r5"  -> aquila-am69_r5_defconfig  (32-bit ARM Cortex-R5F SPL)
@@ -9,6 +9,13 @@
 #                      + BINMAN_INDIRS, BL31=<tfa>/bl31.bin, TEE=<optee>/tee-raw.bin
 #                      => tispl.bin  (A72 SPL + TF-A bl31 + OP-TEE + DM fw)
 #                      => u-boot.img (U-Boot proper)
+#
+#   flasher = true (a72 only) -> same build, but the board env is patched so U-Boot's
+#                      `preboot` immediately runs `dfu 0 mmc 0`, exposing the eMMC
+#                      (boot0 + user area) as USB DFU targets. This lets the whole
+#                      install run over USB with NO serial console (see emmc-flash /
+#                      the flake's `flash` app). Only u-boot.img is installed; it is
+#                      loaded transiently into RAM and never written to the device.
 #
 # Mirrors the per-platform switch in nixos-xlnx/pkgs/u-boot-xlnx.nix. Source/rev =
 # Toradex fork toradex_ti-u-boot-2024.04 (verified to contain both defconfigs and the
@@ -25,6 +32,7 @@
   tiLinuxFirmware, # ti-linux-firmware-k3 derivation
   bl31 ? null, # store-path string (a72 only)
   tee ? null, # store-path string (a72 only)
+  flasher ? false, # a72 only: auto-enter `dfu 0 mmc 0` for serial-free flashing
 }:
 
 assert lib.elem variant [
@@ -32,6 +40,7 @@ assert lib.elem variant [
   "a72"
 ];
 assert variant == "a72" -> (bl31 != null && tee != null);
+assert flasher -> variant == "a72";
 
 let
   src = fetchgit {
@@ -60,13 +69,33 @@ let
       yamllint
     ]
   );
+
+  nameSuffix = if flasher then "${variant}-flasher" else variant;
+
+  # eMMC DFU layout (TI's standard from include/env/ti/k3_dfu.env, which the Toradex
+  # Aquila env does not include): boot0 raw blobs at the same offsets Tezi uses, plus a
+  # whole-disk write to the user area (mmcpart 0) for the rootfs image.
+  dfuAltInfoEmmc = lib.concatStringsSep ";" [
+    "tiboot3.bin.raw raw 0x0 0x400 mmcpart 1"
+    "tispl.bin.raw raw 0x400 0x1000 mmcpart 1"
+    "u-boot.img.raw raw 0x1400 0x2000 mmcpart 1"
+    "sdcard.raw raw 0x0 0x4000000 mmcpart 0"
+  ];
 in
 (buildUBoot {
   inherit src defconfig;
   stdenv = ubStdenv;
-  version = "2024.04-toradex-aquila-${variant}";
+  version = "2024.04-toradex-aquila-${nameSuffix}";
   # The R5 SPL is cross-built to armv7l (its hostPlatform); the A72 stage is aarch64.
   extraMeta.platforms = if variant == "r5" then [ "armv7l-linux" ] else [ "aarch64-linux" ];
+
+  # Flasher: enable preboot so the patched env's `preboot` runs `dfu 0 mmc 0`.
+  extraConfig = lib.optionalString flasher ''
+    CONFIG_USE_PREBOOT=y
+    CONFIG_CMD_DFU=y
+    CONFIG_DFU=y
+    CONFIG_DFU_MMC=y
+  '';
 
   extraMakeFlags =
     [ "BINMAN_INDIRS=${tiLinuxFirmware}" ]
@@ -84,6 +113,9 @@ in
       # Install the HS-FS blob by its real name (the plain tiboot3.bin is a binman
       # symlink to the GP variant); this is exactly what Tezi flashes to boot0.
       [ "tiboot3-am69-hs-fs-aquila.bin" ]
+    else if flasher then
+      # Only u-boot.img is used (loaded into RAM to run the DFU server).
+      [ "u-boot.img" ]
     else
       [
         "tispl.bin"
@@ -96,4 +128,16 @@ in
     nativeBuildInputs =
       (builtins.filter (p: !(lib.hasInfix "python3" "${p.name or ""}")) old.nativeBuildInputs)
       ++ [ binmanPython ];
+
+    # Flasher: append the eMMC DFU alt-info and a preboot that auto-serves it, so the
+    # RAM-booted U-Boot needs no serial interaction. (Appended to the board .env, which
+    # is compiled into the default environment.)
+    postPatch =
+      (old.postPatch or "")
+      + lib.optionalString flasher ''
+        cat >> board/toradex/aquila-am69/aquila-am69.env <<'AQUILA_FLASH_ENV'
+        dfu_alt_info_emmc=${dfuAltInfoEmmc}
+        preboot=mmc dev 0; setenv dfu_alt_info ''${dfu_alt_info_emmc}; dfu 0 mmc 0
+        AQUILA_FLASH_ENV
+      '';
   })
