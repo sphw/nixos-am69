@@ -29,10 +29,15 @@ two U-Boot builds (R5 → `tiboot3`, A72 → `tispl` + `u-boot.img`).
 
 ## Building
 
-All builds run on a native **aarch64-linux** Nix (OrbStack on Apple Silicon),
-invoked with the `orb` prefix. Build bottom-up:
+The target is always **aarch64-linux**. The flake supports two build hosts:
+
+- **aarch64-linux** (e.g. OrbStack on Apple Silicon, via the `orb` prefix) — everything
+  builds natively.
+- **x86_64-linux** — everything cross-compiles (kernel, U-Boot R5/A72, TF-A, OP-TEE,
+  rootfs, image). Just build the `x86_64-linux` outputs; Nix cross-compiles automatically.
 
 ```sh
+# Native (aarch64 host):
 orb nix build .#ti-linux-firmware-k3     # sysfw + DM blobs
 orb nix build .#armTrustedFirmwareK3     # bl31.bin
 orb nix build .#opteeK3                  # tee-raw.bin
@@ -40,7 +45,18 @@ orb nix build .#ubootAquilaR5            # tiboot3-am69-hs-fs-aquila.bin
 orb nix build .#ubootAquilaA72           # tispl.bin + u-boot.img
 orb nix build .#linux_aquila             # Image + dtbs
 orb nix build .#nixosConfigurations.aquila-am69.config.system.build.sdImage
+
+# Cross from an x86_64-linux host — same artifacts, just the x86_64-linux outputs:
+nix build .#packages.x86_64-linux.sdImage
+nix build .#packages.x86_64-linux.ubootAquilaR5      # etc.
+# or the cross nixosConfiguration:
+nix build .#nixosConfigurations.aquila-am69-x86.config.system.build.sdImage
 ```
+
+`packages.<buildSystem>.*` and `legacyPackages.<buildSystem>.*` always produce
+aarch64 target artifacts; on `x86_64-linux` they are cross-built. The `flash` app is
+the exception — it is native to the build host (it runs `dfu-util` there) and merely
+references the cross-built target images.
 
 The kernel (stock arm64 `defconfig`) builds a very large module tree. If the Nix
 daemon's build dir is a small tmpfs (OrbStack's `/tmp` defaults to ~RAM/2), the
